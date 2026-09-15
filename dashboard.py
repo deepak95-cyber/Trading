@@ -482,7 +482,6 @@ with tab_open:
     qty_col_name = find_col(df, "qty") or find_col(df, "quantity")
     cmp_col_name = find_col(df, "cmp") or find_col(df, "current")
 
-    # Helper function to extract numeric values safely from columns
     def get_num(row, col_name_str):
         if not col_name_str:
             return 0.0
@@ -490,7 +489,6 @@ with tab_open:
         num = pd.to_numeric(val, errors='coerce')
         return float(num) if pd.notnull(num) else 0.0
 
-    # Locate Pyramid & Exit QTY Columns dynamically
     p1_qty_col = find_col(df, "p1 qty") or find_col(df, "pyramid 1 qty") or find_col(df, "p-1 qty") or find_col(df, "p1_qty")
     p2_qty_col = find_col(df, "p2 qty") or find_col(df, "pyramid 2 qty") or find_col(df, "p-2 qty") or find_col(df, "p2_qty")
     
@@ -501,13 +499,11 @@ with tab_open:
     open_positions_raw = []
 
     if not df.empty and inst_col_name:
-        # Check for explicitly labeled open trades or positions missing exit status
         if status_col:
             open_df = df[df[status_col].astype(str).str.lower().str.contains("open", na=False)].copy()
         else:
             open_df = pd.DataFrame()
 
-        # Fallback filter: rows with an entry price but no exit status marked closed
         if open_df.empty and entry_col_name:
             open_df = df[
                 df[entry_col_name].astype(str).str.strip().ne('') & 
@@ -536,12 +532,10 @@ with tab_open:
             ex2_qty = int(get_num(r, e2_qty_col))
             ex3_qty = int(get_num(r, e3_qty_col))
 
-            # Dynamic Quantity Calculations from Excel / Sheet inputs
             total_pos_qty = initial_qty + p1_qty + p2_qty
             total_exited_qty = ex1_qty + ex2_qty + ex3_qty
             open_pos_qty = max(0, total_pos_qty - total_exited_qty)
 
-            # Use active open_pos_qty for valuation and risk calculations (fall back to total_pos_qty if open is 0)
             calc_qty = open_pos_qty if open_pos_qty > 0 else total_pos_qty
 
             risk_per_share = max(entry_p - sl_p, 0.0)
@@ -699,7 +693,7 @@ with tab_rr:
         st.html("""
         <div class="section-card" style="padding:16px;">
             <div class="section-title">📂 Open Trades Exit Signals & R-Scale Visualizer</div>
-            <div class="section-desc">Tracks current market price (LTP) against SL, Entry, 2R, and 4R milestone zones</div>
+            <div class="section-desc">Tracks current market price (LTP) against SL, Entry, 2R, 4R, and 6R milestone zones</div>
         </div>
         """)
 
@@ -741,7 +735,8 @@ with tab_rr:
                         'cmp': float(c_val),
                         'risk': float(r),
                         '2r': float(e_val + 2 * r),
-                        '4r': float(e_val + 4 * r)
+                        '4r': float(e_val + 4 * r),
+                        '6r': float(e_val + 6 * r)
                     })
 
         for ot in open_trades:
@@ -750,12 +745,13 @@ with tab_rr:
             cmp = ot['cmp']
             r2 = ot['2r']
             r4 = ot['4r']
+            r6 = ot['6r']
             risk = ot['risk']
 
             r_multiple = (cmp - e) / risk if risk > 0 else 0.0
 
             scale_min = sl
-            scale_max = r4
+            scale_max = r6
             scale_range = scale_max - scale_min
 
             if scale_range > 0:
@@ -763,7 +759,10 @@ with tab_rr:
             else:
                 pct_pos = 0.0
 
-            if r_multiple >= 4.0:
+            if r_multiple >= 6.0:
+                status_label = "🚀 6R+ Hit! Max Runner Exit Zone"
+                status_color = "#e879f9"
+            elif r_multiple >= 4.0:
                 status_label = "🔥 4R Hit! Book 1/3 or 1/2"
                 status_color = "#a855f7"
             elif r_multiple >= 2.0:
@@ -800,20 +799,22 @@ with tab_rr:
                         <span>Entry: <b style="color:#f8fafc;">₹{e:.2f}</b></span>
                         <span>2R: <b style="color:#34d399;">₹{r2:.2f}</b></span>
                         <span>4R: <b style="color:#a855f7;">₹{r4:.2f}</b></span>
+                        <span>6R: <b style="color:#e879f9;">₹{r6:.2f}</b></span>
                     </div>
 
                     <div style="position:relative; width:100%; height:10px; background-color:#1e293b; border-radius:6px; margin:10px 0 6px 0;">
-                        <div style="position:absolute; top:0; left:0; height:100%; width:{pct_pos:.1f}%; background:linear-gradient(90deg, #f87171 0%, #3b82f6 30%, #34d399 70%, #a855f7 100%); border-radius:6px;"></div>
-                        <div style="position:absolute; top:-2px; left:{((e-sl)/scale_range)*100:.1f}%; width:2px; height:14px; background-color:#f8fafc;" title="Entry Price"></div>
+                        <div style="position:absolute; top:0; left:0; height:100%; width:{pct_pos:.1f}%; background:linear-gradient(90deg, #f87171 0%, #3b82f6 25%, #34d399 55%, #a855f7 80%, #e879f9 100%); border-radius:6px;"></div>
+                        <div style="position:absolute; top:-2px; left:{((e-sl)/scale_range)*100:.1f}%; width:2px; height:14px; background-color:#f8fafc;" title="Entry Price (1R)"></div>
                         <div style="position:absolute; top:-2px; left:{((r2-sl)/scale_range)*100:.1f}%; width:2px; height:14px; background-color:#34d399;" title="2R Target"></div>
+                        <div style="position:absolute; top:-2px; left:{((r4-sl)/scale_range)*100:.1f}%; width:2px; height:14px; background-color:#a855f7;" title="4R Target"></div>
                         <div style="position:absolute; top:-4px; left:calc({pct_pos:.1f}% - 5px); width:10px; height:18px; background-color:#ffffff; border:2px solid {status_color}; border-radius:3px; box-shadow: 0 0 6px {status_color};" title="Current Price: ₹{cmp:.2f}"></div>
                     </div>
 
                     <div style="display:flex; justify-content:space-between; font-size:10px; color:#475569; font-weight:600;">
                         <span>0R (SL)</span>
-                        <span>1R (Entry)</span>
-                        <span>3R</span>
-                        <span>5R (4R Exit)</span>
+                        <span>2R</span>
+                        <span>4R</span>
+                        <span>6R</span>
                     </div>
                 </div>
                 """)
