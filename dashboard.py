@@ -97,6 +97,27 @@ st.html("""
     .callout-green { background-color: rgba(6, 78, 59, 0.2); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; }
     .callout-red { background-color: rgba(127, 29, 29, 0.2); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; }
     .callout-blue { background-color: rgba(30, 58, 138, 0.2); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; }
+    .rule-section-card {
+        background-color: #0f172a;
+        border: 1px solid #1e293b;
+        border-radius: 10px;
+        padding: 16px;
+        margin-bottom: 16px;
+    }
+    .rule-title {
+        font-size: 15px;
+        font-weight: 700;
+        color: #34d399;
+        margin-bottom: 8px;
+        border-bottom: 1px solid #1e293b;
+        padding-bottom: 6px;
+    }
+    .rule-item {
+        font-size: 13px;
+        color: #cbd5e1;
+        line-height: 1.6;
+        margin-bottom: 6px;
+    }
     .calc-display-green { background-color: rgba(6, 78, 59, 0.2); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 16px; margin-bottom: 12px; }
     .calc-display-blue { background-color: rgba(30, 58, 138, 0.2); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; padding: 16px; }
     .stTextInput input, .stNumberInput input, .stSelectbox > div > div { background-color: #0b0f17 !important; border: 1px solid #334155 !important; color: #f8fafc !important; border-radius: 6px !important; }
@@ -159,6 +180,40 @@ def load_data():
         return df
     except Exception:
         return pd.DataFrame()
+
+def load_rules_data():
+    """Dynamically fetches rule categories and bullet details from the RULES worksheet."""
+    try:
+        gc = get_gspread_client()
+        sh = gc.open_by_key(SPREADSHEET_ID)
+        ws = sh.worksheet("RULES")
+        rows = ws.get_all_values()
+        
+        rules_dict = {}
+        current_section = "General Trading Rules"
+        
+        for row in rows:
+            if not row:
+                continue
+            col1 = row[0].strip() if len(row) > 0 else ""
+            col2 = row[1].strip() if len(row) > 1 else ""
+            
+            # If Column A contains a section heading, set current section
+            if col1:
+                current_section = col1
+                if current_section not in rules_dict:
+                    rules_dict[current_section] = []
+            
+            # If Column B has contents, append it under current section
+            if col2:
+                if current_section not in rules_dict:
+                    rules_dict[current_section] = []
+                rules_dict[current_section].append(col2)
+                
+        return rules_dict
+    except Exception as e:
+        st.error(f"Error fetching rules sheet: {e}")
+        return {}
 
 df = load_data()
 
@@ -1191,26 +1246,52 @@ with tab_size:
 with tab_rules:
     st.html("""
     <div class="section-card">
-        <div class="section-title">📖 Rules & Execution Playbook</div>
-        <div class="section-desc">Core trading system rules and trade management principles</div>
-        
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-top:16px;">
-            <div class="callout-box callout-green">
-                <b style="font-size:14px;">Entry & Risk Rules</b>
-                <ul style="margin-top:8px; padding-left:16px;">
-                    <li>Max Risk per trade: Never exceed 0.50% of total capital.</li>
-                    <li>Always trade in alignment with Market Phase GREEN.</li>
-                    <li>Only trade high volume breakout setups (20 UC, IPO Base, VCP).</li>
-                </ul>
-            </div>
-            <div class="callout-box callout-blue">
-                <b style="font-size:14px;">Exit & Pyramiding Rules</b>
-                <ul style="margin-top:8px; padding-left:16px;">
-                    <li>Move SL to breakeven at +2R gain.</li>
-                    <li>Scale out 50% position at +4R gain.</li>
-                    <li>Never merge 1st and 2nd position SLs without volume confirmation.</li>
-                </ul>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <div class="section-title">📖 Rules & Execution Playbook</div>
+                <div class="section-desc">Core trading system rules and trade management principles</div>
             </div>
         </div>
     </div>
     """)
+
+    # --- ORIGINAL / STATIC RULES VIEW ---
+    col_r1, col_r2 = st.columns(2)
+    with col_r1:
+        st.html("""
+        <div class="rule-section-card">
+            <div class="rule-title">Entry & Risk Rules</div>
+            <div class="rule-item">• Max Risk per trade: Never exceed 0.50% of total capital.</div>
+            <div class="rule-item">• Always trade in alignment with Market Phase GREEN.</div>
+            <div class="rule-item">• Only trade high volume breakout setups (20 UC, IPO Base, VCP).</div>
+        </div>
+        """)
+    with col_r2:
+        st.html("""
+        <div class="rule-section-card">
+            <div class="rule-title" style="color:#60a5fa;">Exit & Pyramiding Rules</div>
+            <div class="rule-item">• Move SL to breakeven at +2R gain.</div>
+            <div class="rule-item">• Scale out 50% position at +4R gain.</div>
+            <div class="rule-item">• Never merge 1st and 2nd position SLs without volume confirmation.</div>
+        </div>
+        """)
+
+    # --- DYNAMIC RULES VIEW (APPENDED BELOW) ---
+    fetched_rules = load_rules_data()
+    if fetched_rules:
+        st.html("""
+        <div class="section-title" style="margin-top: 15px; margin-bottom: 10px;">📋 Additional Playbook & Rules (From Sheet)</div>
+        """)
+        r_cols = st.columns(2)
+        items = list(fetched_rules.items())
+        
+        for index, (title, lines) in enumerate(items):
+            col_target = r_cols[index % 2]
+            rules_list_html = "".join([f'<div class="rule-item">• {line}</div>' for line in lines])
+            
+            col_target.html(f"""
+            <div class="rule-section-card">
+                <div class="rule-title">{title}</div>
+                <div>{rules_list_html}</div>
+            </div>
+            """)
