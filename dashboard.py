@@ -5,6 +5,9 @@ from google.oauth2.service_account import Credentials
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, date
+import subprocess
+import json
+import os
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -198,13 +201,11 @@ def load_rules_data():
             col1 = row[0].strip() if len(row) > 0 else ""
             col2 = row[1].strip() if len(row) > 1 else ""
             
-            # If Column A contains a section heading, set current section
             if col1:
                 current_section = col1
                 if current_section not in rules_dict:
                     rules_dict[current_section] = []
             
-            # If Column B has contents, append it under current section
             if col2:
                 if current_section not in rules_dict:
                     rules_dict[current_section] = []
@@ -322,7 +323,6 @@ with tab_dash:
         df['Cumulative_Pct'] = []
         peak_pct = 0.0
 
-    # Section 1: Top Metrics Bar
     k1, k2, k3, k4, k5, k6 = st.columns(6)
 
     k1.html(f"""
@@ -375,7 +375,6 @@ with tab_dash:
 
     st.html("<br>")
 
-    # Section 2: Main Performance Charts & Setup Breakdown
     c_left, c_right = st.columns([1.7, 1])
 
     with c_left:
@@ -443,7 +442,6 @@ with tab_dash:
         </div>
         """)
 
-    # Section 3: Monthly Ledger & Portfolio Observations
     m_left, m_right = st.columns([1.3, 1])
 
     with m_left:
@@ -552,6 +550,7 @@ with tab_open:
     e3_qty_col = find_col(df, "exit 3 qty") or find_col(df, "exit-3 qty") or find_col(df, "ex3 qty") or find_col(df, "ex3_qty")
 
     open_positions_raw = []
+    open_symbols_list = []
 
     if not df.empty and inst_col_name:
         if status_col:
@@ -565,14 +564,11 @@ with tab_open:
                 ~df[status_col].astype(str).str.lower().str.contains("closed", na=False)
             ].copy()
 
-        open_metadata = {
-            "CUPID": {"earnings": date(2026, 9, 14)},
-            "HSCL": {"earnings": date(2026, 9, 22)},
-            "CMRGREEN": {"earnings": date(2026, 10, 8)}
-        }
-
         for _, r in open_df.iterrows():
             ticker = str(r[inst_col_name]).strip().upper()
+            if ticker and ticker not in open_symbols_list:
+                open_symbols_list.append(ticker)
+
             entry_p = get_num(r, entry_col_name)
             sl_p = get_num(r, sl_col_name)
             cmp_p = get_num(r, cmp_col_name)
@@ -599,8 +595,6 @@ with tab_open:
             position_val = entry_p * calc_qty
             unrealised_pl = (cmp_p - entry_p) * calc_qty
 
-            meta = open_metadata.get(ticker, {"earnings": None})
-
             open_positions_raw.append({
                 "Ticker": ticker,
                 "Total QTY": total_pos_qty,
@@ -611,12 +605,60 @@ with tab_open:
                 "Position Value": position_val,
                 "Open Risk (₹)": total_risk,
                 "Risk % Capital": risk_pct_cap,
-                "Unrealised P/L": unrealised_pl,
-                "Earnings Date": meta["earnings"]
+                "Unrealised P/L": unrealised_pl
             })
 
-    today_date = date.today()
-    caution_threshold_days = 10
+    # Action layout for automatic run and Force PB update button
+    hdr_col1, hdr_col2 = st.columns([3, 1])
+    with hdr_col1:
+        st.html("""
+        <div class="section-card" style="margin-bottom:0px;">
+            <div class="section-title">🔓 Active Holdings & Risk Matrix</div>
+            <div class="section-desc">Live open risk calculations and price band snapshots</div>
+        </div>
+        """)
+    with hdr_col2:
+        st.html("<div style='height: 10px;'></div>") # spacer
+        force_clicked = st.button("Force PB update", use_container_width=True)
+
+    # Execute Circuit.py script based on button click or default load
+    if open_symbols_list:
+        sym_arg = ",".join(open_symbols_list)
+        try:
+            if force_clicked:
+                subprocess.run(["python", "Circuit.py", sym_arg, "--force"], capture_output=True, text=True)
+                st.success("Forced price band update completed successfully!")
+            else:
+                subprocess.run(["python", "Circuit.py", sym_arg], capture_output=True, text=True)
+        except Exception as e:
+            st.error(f"Error executing Circuit.py: {e}")
+    else:
+        try:
+            if force_clicked:
+                subprocess.run(["python", "Circuit.py", "--empty", "--force"], capture_output=True, text=True)
+                st.success("Forced empty price band update completed!")
+            else:
+                subprocess.run(["python", "Circuit.py", "--empty"], capture_output=True, text=True)
+        except Exception:
+            pass
+
+    # Load current and new circuit snapshots
+    current_bands_data = {}
+    new_bands_data = {}
+
+    if os.path.exists("nse_circuit_snapshot_current.json"):
+        try:
+            with open("nse_circuit_snapshot_current.json", "r", encoding="utf-8") as f:
+                current_bands_data = json.load(f).get("symbols", {})
+        except Exception:
+            pass
+
+    if os.path.exists("nse_circuit_snapshot_new.json"):
+        try:
+            with open("nse_circuit_snapshot_new.json", "r", encoding="utf-8") as f:
+                new_bands_data = json.load(f).get("symbols", {})
+        except Exception:
+            pass
 
     total_invested_amt = sum(x["Position Value"] for x in open_positions_raw)
     total_invested_pct = (total_invested_amt / curr_cap) * 100 if curr_cap > 0 else 0.0
@@ -671,26 +713,22 @@ with tab_open:
 
     st.html("<br>")
 
-    st.html("""
-    <div class="section-card">
-        <div class="section-title">🔓 Active Holdings & Risk Matrix</div>
-        <div class="section-desc">Live open risk calculations and days remaining to earnings</div>
-    </div>
-    """)
-
     table_rows_html = ""
     for pos in open_positions_raw:
-        e_date = pos["Earnings Date"]
-        if e_date:
-            days_rem = (e_date - today_date).days
-            date_str = e_date.strftime("%d-%b-%Y")
-            
-            if days_rem <= caution_threshold_days:
-                earnings_badge = f'<div style="background-color:rgba(239, 68, 68, 0.2); border:1px solid rgba(239, 68, 68, 0.6); color:#f87171; padding:6px 10px; border-radius:6px; font-weight:700; text-align:center;">⚠️ {date_str}<br><span style="font-size:11px;">({days_rem} Days Left - CAUTION)</span></div>'
-            else:
-                earnings_badge = f'<div style="background-color:rgba(16, 185, 129, 0.1); border:1px solid rgba(16, 185, 129, 0.3); color:#34d399; padding:6px 10px; border-radius:6px; text-align:center;">📅 {date_str}<br><span style="font-size:11px;">({days_rem} Days Away)</span></div>'
+        ticker = pos["Ticker"]
+        
+        prev_band_val = current_bands_data.get(ticker, {}).get("band_pct")
+        latest_band_val = new_bands_data.get(ticker, {}).get("band_pct")
+
+        # Determine price band display based on whether a change occurred
+        if prev_band_val is not None and latest_band_val is not None and prev_band_val != latest_band_val:
+            band_display = f'<b style="color:#ef4444;">{prev_band_val:g}% -> {latest_band_val:g}%</b>'
+        elif latest_band_val is not None:
+            band_display = f'{latest_band_val:g}%'
+        elif prev_band_val is not None:
+            band_display = f'{prev_band_val:g}%'
         else:
-            earnings_badge = '<span style="color:#64748b;">N/A</span>'
+            band_display = 'N/A'
 
         p_pl = pos["Unrealised P/L"]
         pl_color = "#34d399" if p_pl >= 0 else "#f87171"
@@ -698,7 +736,7 @@ with tab_open:
 
         table_rows_html += f"""
         <tr style="border-bottom:1px solid #1e293b; height:50px;">
-            <td style="padding:10px; font-weight:700; color:#f8fafc;">{pos['Ticker']}</td>
+            <td style="padding:10px; font-weight:700; color:#f8fafc;">{ticker}</td>
             <td style="padding:10px; color:#cbd5e1; font-weight:600;">{pos['Total QTY']}</td>
             <td style="padding:10px; color:#34d399; font-weight:700;">{pos['Open QTY']}</td>
             <td style="padding:10px; color:#cbd5e1;">₹{pos['Entry Price']:,.2f}</td>
@@ -708,7 +746,7 @@ with tab_open:
             <td style="padding:10px; color:#f87171;">₹{pos['Open Risk (₹)']:,.2f}</td>
             <td style="padding:10px; color:#94a3b8;">{pos['Risk % Capital']:.2f}%</td>
             <td style="padding:10px; color:{pl_color}; font-weight:700;">{pl_sign}₹{p_pl:,.2f}</td>
-            <td style="padding:6px;">{earnings_badge}</td>
+            <td style="padding:10px; text-align:center;">{band_display}</td>
         </tr>
         """
 
@@ -727,7 +765,7 @@ with tab_open:
                     <th style="padding:10px;">Open Risk (₹)</th>
                     <th style="padding:10px;">Risk % Cap</th>
                     <th style="padding:10px;">Unrealised P/L</th>
-                    <th style="padding:10px; text-align:center;">Upcoming Earnings & Days Left</th>
+                    <th style="padding:10px; text-align:center;">Price Band</th>
                 </tr>
             </thead>
             <tbody>
@@ -743,7 +781,6 @@ with tab_open:
 with tab_rr:
     col_open, col_calc = st.columns([1.25, 1])
 
-    # Left Column: Open Trades Exit Signals Panel with Line Bar Visualizers
     with col_open:
         st.html("""
         <div class="section-card" style="padding:16px;">
@@ -882,7 +919,6 @@ with tab_rr:
                     args=(ot['symbol'], ot['entry'], ot['sl'])
                 )
 
-    # Right Column: Target & R:R Calculator
     with col_calc:
         current_sym = st.session_state['selected_symbol']
         
@@ -1255,7 +1291,6 @@ with tab_rules:
     </div>
     """)
 
-    # --- ORIGINAL / STATIC RULES VIEW ---
     col_r1, col_r2 = st.columns(2)
     with col_r1:
         st.html("""
@@ -1276,7 +1311,6 @@ with tab_rules:
         </div>
         """)
 
-    # --- DYNAMIC RULES VIEW (APPENDED BELOW) ---
     fetched_rules = load_rules_data()
     if fetched_rules:
         st.html("""
