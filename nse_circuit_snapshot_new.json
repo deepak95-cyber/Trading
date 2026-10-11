@@ -1,0 +1,12 @@
+{
+  "generated_at": "2026-10-11T21:55:04",
+  "symbols": {
+    "DIACABS": {
+      "band_pct": 5.0,
+      "upper_circuit": 390.49,
+      "lower_circuit": 353.3,
+      "last_price": 380.95,
+      "prev_close": 371.9
+    }
+  }
+}
