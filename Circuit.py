@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/init/env python3
 """Poll NSE symbols via yfinance and official NSE price band data, 
 maintain current and new JSON snapshots, ensure single execution per day."""
 
@@ -35,28 +35,6 @@ def fetch_all_symbols():
     return symbols
 
 
-def get_nse_price_bands():
-    """Fetch official NSE price band data if available, or return a dynamic mapping helper."""
-    bands = {}
-    try:
-        # NSE provides a complete security list containing price bands
-        # We use standard user-agent headers to bypass basic blocks
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://www.nseindia.com/"
-        }
-        # Session to capture cookies if needed
-        session = requests.Session()
-        session.get("https://www.nseindia.com", headers=headers, timeout=10)
-        
-        # Alternatively, check standard price band list URL if accessible
-        # For safety and robustness, we fallback to intelligent defaults per stock type 
-    except Exception:
-        pass
-    return bands
-
-
 def fetch_quotes_bulk(symbols):
     """Fetch latest quotes and dynamic price bands for a list of symbols."""
     yf_symbols = [f"{s}.NS" for s in symbols]
@@ -89,11 +67,8 @@ def fetch_quotes_bulk(symbols):
             prev_close = float(df.iloc[-2]["Close"]) if len(df) > 1 else float(latest["Open"]) if "Open" in df.columns else last_price
 
             # Dynamic Band Detection Logic:
-            # Stocks with derivatives enabled or specific categories have 5%, 10%, or 20% bands.
-            # We can check specific known caps or default based on volatility/symbol rules.
-            # For DIACABS and similar specific small/mid caps with 5% bands:
             band_pct = 20.0
-            if symbol in ["DIACABS"]:  # Add custom overrides or map from NSE files here
+            if symbol in ["DIACABS"]:  # Custom overrides or map from NSE files here
                 band_pct = 5.0
             
             upper_circuit = round(prev_close * (1 + band_pct / 100.0), 2)
@@ -129,10 +104,6 @@ def dump_snapshot(path, quotes):
         json.dump({"generated_at": timestamp, "symbols": quotes}, f, indent=2)
 
 
-def band_label(band_pct):
-    return "No Band" if band_pct is None else f"{band_pct:g}%"
-
-
 def check_already_run_today(current_path):
     """Check if the current snapshot file was already generated today."""
     if not os.path.exists(current_path):
@@ -151,15 +122,12 @@ def check_already_run_today(current_path):
         return False
 
 
-def clean_output_files(current_path, new_path):
-    cleaned = False
+def empty_output_files(current_path, new_path):
+    """Clear the content of output files without deleting them."""
     for path in [current_path, new_path]:
-        if os.path.exists(path):
-            os.remove(path)
-            print(f"Removed output file: {path}")
-            cleaned = True
-    if not cleaned:
-        print("No output files found to clean.")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({}, f, indent=2)
+        print(f"Emptied content of file: {path}")
 
 
 def run_once(symbols, current_path, new_path, force=False):
@@ -186,11 +154,11 @@ def run_once(symbols, current_path, new_path, force=False):
         if changed:
             print(
                 f"[{timestamp}] ALERT {symbol}: circuit band changed "
-                f"{band_label(old_band)} -> {band_label(new_band)}"
+                f"{old_band}% -> {new_band}%"
             )
         else:
             print(
-                f"[{timestamp}] {symbol}: band={band_label(new_band)} "
+                f"[{timestamp}] {symbol}: band={new_band}% "
                 f"LTP={quote['last_price']} "
                 f"CP={quote['lower_circuit']}/{quote['upper_circuit']}"
             )
@@ -211,7 +179,7 @@ def main():
     )
     parser.add_argument(
         "--empty", action="store_true",
-        help="Clean/delete existing output JSON files.",
+        help="Clear content of output JSON files without deleting them.",
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -228,7 +196,7 @@ def main():
     args = parser.parse_args()
 
     if args.empty:
-        clean_output_files(args.current, args.new)
+        empty_output_files(args.current, args.new)
         sys.exit(0)
 
     if not args.all and not args.symbols:
