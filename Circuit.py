@@ -91,7 +91,10 @@ def load_snapshot(path):
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                content = f.read().strip()
+                if not content:
+                    return {}
+                return json.loads(content)
         except Exception:
             return {}
     return {}
@@ -126,13 +129,16 @@ def empty_output_files(current_path, new_path):
     """Clear the content of output files without deleting them."""
     for path in [current_path, new_path]:
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({}, f, indent=2)
+            json.dump({"generated_at": "", "symbols": {}}, f, indent=2)
         print(f"Emptied content of file: {path}")
 
 
 def run_once(symbols, current_path, new_path, force=False):
     if not force and check_already_run_today(current_path):
         print(f"Skipping: Snapshot '{current_path}' was already generated today. Use --force to override.")
+        # Ensure new path mirrors current if skipped so dashboard finds valid data
+        if os.path.exists(current_path) and not os.path.exists(new_path):
+            shutil.copy(current_path, new_path)
         return
 
     timestamp = datetime.now().isoformat(timespec="seconds")

@@ -626,8 +626,11 @@ with tab_open:
         sym_arg = ",".join(open_symbols_list)
         try:
             if force_clicked:
-                subprocess.run(["python", "Circuit.py", sym_arg, "--force"], capture_output=True, text=True)
-                st.success("Forced price band update completed successfully!")
+                res = subprocess.run(["python", "Circuit.py", sym_arg, "--force"], capture_output=True, text=True)
+                if res.returncode == 0:
+                    st.success("Forced price band update completed successfully!")
+                else:
+                    st.error(f"Circuit.py error: {res.stderr}")
             else:
                 subprocess.run(["python", "Circuit.py", sym_arg], capture_output=True, text=True)
         except Exception as e:
@@ -635,28 +638,31 @@ with tab_open:
     else:
         try:
             if force_clicked:
-                subprocess.run(["python", "Circuit.py", "--empty", "--force"], capture_output=True, text=True)
-                st.success("Forced empty price band update completed!")
+                res = subprocess.run(["python", "Circuit.py", "--empty", "--force"], capture_output=True, text=True)
+                if res.returncode == 0:
+                    st.success("Forced empty price band update completed!")
             else:
                 subprocess.run(["python", "Circuit.py", "--empty"], capture_output=True, text=True)
         except Exception:
             pass
 
-    # Load current and new circuit snapshots
+    # Load current and new circuit snapshots with robust key normalization
     current_bands_data = {}
     new_bands_data = {}
 
     if os.path.exists("nse_circuit_snapshot_current.json"):
         try:
             with open("nse_circuit_snapshot_current.json", "r", encoding="utf-8") as f:
-                current_bands_data = json.load(f).get("symbols", {})
+                raw_curr = json.load(f).get("symbols", {})
+                current_bands_data = {str(k).upper().replace(".NS", "").strip(): v for k, v in raw_curr.items()}
         except Exception:
             pass
 
     if os.path.exists("nse_circuit_snapshot_new.json"):
         try:
             with open("nse_circuit_snapshot_new.json", "r", encoding="utf-8") as f:
-                new_bands_data = json.load(f).get("symbols", {})
+                raw_new = json.load(f).get("symbols", {})
+                new_bands_data = {str(k).upper().replace(".NS", "").strip(): v for k, v in raw_new.items()}
         except Exception:
             pass
 
@@ -716,9 +722,10 @@ with tab_open:
     table_rows_html = ""
     for pos in open_positions_raw:
         ticker = pos["Ticker"]
+        clean_ticker = ticker.upper().replace(".NS", "").strip()
         
-        prev_band_val = current_bands_data.get(ticker, {}).get("band_pct")
-        latest_band_val = new_bands_data.get(ticker, {}).get("band_pct")
+        prev_band_val = current_bands_data.get(clean_ticker, {}).get("band_pct")
+        latest_band_val = new_bands_data.get(clean_ticker, {}).get("band_pct")
 
         # Determine price band display based on whether a change occurred
         if prev_band_val is not None and latest_band_val is not None and prev_band_val != latest_band_val:
