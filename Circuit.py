@@ -136,7 +136,6 @@ def empty_output_files(current_path, new_path):
 def run_once(symbols, current_path, new_path, force=False):
     if not force and check_already_run_today(current_path):
         print(f"Skipping: Snapshot '{current_path}' was already generated today. Use --force to override.")
-        # Ensure new path mirrors current if skipped so dashboard finds valid data
         if os.path.exists(current_path) and not os.path.exists(new_path):
             shutil.copy(current_path, new_path)
         return

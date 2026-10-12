@@ -608,7 +608,7 @@ with tab_open:
                 "Unrealised P/L": unrealised_pl
             })
 
-    # Action layout for automatic run and Force PB update button
+    # Action layout for automatic run and Force PB update button (using sys.executable)
     hdr_col1, hdr_col2 = st.columns([3, 1])
     with hdr_col1:
         st.html("""
@@ -621,28 +621,28 @@ with tab_open:
         st.html("<div style='height: 10px;'></div>") # spacer
         force_clicked = st.button("Force PB update", use_container_width=True)
 
-    # Execute Circuit.py script based on button click or default load
+    # Execute Circuit.py script with sys.executable to inherit Streamlit's virtualenv packages
     if open_symbols_list:
         sym_arg = ",".join(open_symbols_list)
         try:
             if force_clicked:
-                res = subprocess.run(["python", "Circuit.py", sym_arg, "--force"], capture_output=True, text=True)
+                res = subprocess.run([sys.executable, "Circuit.py", sym_arg, "--force"], capture_output=True, text=True)
                 if res.returncode == 0:
                     st.success("Forced price band update completed successfully!")
                 else:
                     st.error(f"Circuit.py error: {res.stderr}")
             else:
-                subprocess.run(["python", "Circuit.py", sym_arg], capture_output=True, text=True)
+                subprocess.run([sys.executable, "Circuit.py", sym_arg], capture_output=True, text=True)
         except Exception as e:
             st.error(f"Error executing Circuit.py: {e}")
     else:
         try:
             if force_clicked:
-                res = subprocess.run(["python", "Circuit.py", "--empty", "--force"], capture_output=True, text=True)
+                res = subprocess.run([sys.executable, "Circuit.py", "--empty", "--force"], capture_output=True, text=True)
                 if res.returncode == 0:
                     st.success("Forced empty price band update completed!")
             else:
-                subprocess.run(["python", "Circuit.py", "--empty"], capture_output=True, text=True)
+                subprocess.run([sys.executable, "Circuit.py", "--empty"], capture_output=True, text=True)
         except Exception:
             pass
 
@@ -727,7 +727,6 @@ with tab_open:
         prev_band_val = current_bands_data.get(clean_ticker, {}).get("band_pct")
         latest_band_val = new_bands_data.get(clean_ticker, {}).get("band_pct")
 
-        # Determine price band display based on whether a change occurred
         if prev_band_val is not None and latest_band_val is not None and prev_band_val != latest_band_val:
             band_display = f'<b style="color:#ef4444;">{prev_band_val:g}% -> {latest_band_val:g}%</b>'
         elif latest_band_val is not None:
