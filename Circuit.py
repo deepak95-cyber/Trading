@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Poll NSE symbols and live exchange-mandated circuit limits using auto-detected local CSV reports 
-and yfinance pricing, maintain JSON snapshots, and ensure single execution per day."""
+"""Poll NSE symbols and live exchange-mandated circuit limits by automatically downloading 
+today's official price band list from NSE archives, maintain JSON snapshots, and ensure single execution per day."""
 
 import argparse
 import csv
@@ -15,12 +15,55 @@ from datetime import datetime
 # Suppress warnings
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
+import requests
 import yfinance as yf
 
 
+def download_latest_nse_band_file():
+    """Dynamically construct today's date URL, download the official NSE CSV file, and save it locally."""
+    today_str = datetime.now().strftime("%d%m%Y")
+    filename = f"sec_list_{today_str}.csv"
+    
+    # If today's file is already downloaded, use it directly
+    if os.path.exists(filename):
+        return filename
+
+    # Construct official NSE archive URL dynamically for today
+    url = f"https://nsearchives.nseindia.com/content/equities/sec_list_{today_str}.csv"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Referer": "https://www.nseindia.com/",
+        "Connection": "keep-alive"
+    }
+
+    try:
+        session = requests.Session()
+        # Hit homepage first to acquire valid session cookies for Cloudflare/Akamai bypass
+        session.get("https://www.nseindia.com", headers=headers, timeout=10)
+        
+        resp = session.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200 and "Symbol" in resp.text:
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(resp.text)
+            print(f"Successfully downloaded fresh NSE band file: {filename}")
+            return filename
+    except Exception as e:
+        print(f"Automated download notice: {e}")
+        
+    return None
+
+
 def load_bands_from_downloaded_csvs():
-    """Automatically scan the directory for downloaded NSE CSV master lists or reports and extract price bands."""
+    """Automatically download today's file or scan directory for any available NSE master lists and extract bands."""
     bands_map = {}
+    
+    # Try downloading today's official file automatically
+    download_latest_nse_band_file()
+    
+    # Scan all local CSV files in the folder (handles today's file or any manual backups)
     csv_files = glob.glob('*.csv')
     
     for filename in csv_files:
@@ -66,11 +109,11 @@ def fetch_quote_and_bands(symbol):
     last_price = 0.0
     prev_close = 0.0
 
-    # Load official exchange bands from local CSV files
+    # Load official exchange bands from local or dynamically downloaded CSVs
     nse_bands = load_bands_from_downloaded_csvs()
     symbol_upper = symbol.strip().upper()
     
-    # Default to 20.0% if not found in any CSV report
+    # Default to 20.0% if not found in the CSV report
     band_pct = nse_bands.get(symbol_upper, 20.0)
 
     try:
