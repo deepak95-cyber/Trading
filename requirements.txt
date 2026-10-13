@@ -5,3 +5,6 @@ google-auth
 plotly
 yfinance
 requests
+nselib
+numpy<2
+nsepython

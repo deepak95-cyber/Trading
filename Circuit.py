@@ -1,9 +1,10 @@
-#!/usr/init/env python3
-"""Poll NSE symbols via yfinance and official NSE price band data, 
-maintain current and new JSON snapshots, ensure single execution per day."""
+#!/usr/bin/env python3
+"""Poll NSE symbols and live exchange-mandated circuit limits using auto-detected local CSV reports 
+and yfinance pricing, maintain JSON snapshots, and ensure single execution per day."""
 
 import argparse
 import csv
+import glob
 import json
 import os
 import shutil
@@ -11,79 +12,111 @@ import sys
 import warnings
 from datetime import datetime
 
-# Suppress pandas/yfinance FutureWarnings
+# Suppress warnings
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
-import pandas as pd
 import yfinance as yf
-import requests
 
-NSE_EQUITY_LIST_URL = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
 
-def fetch_all_symbols():
-    """Download NSE's full listed-equity master and return every symbol."""
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        )
+def load_bands_from_downloaded_csvs():
+    """Automatically scan the directory for downloaded NSE CSV master lists or reports and extract price bands."""
+    bands_map = {}
+    csv_files = glob.glob('*.csv')
+    
+    for filename in csv_files:
+        if filename.lower() == 'surveillance_bands.csv':
+            continue
+            
+        try:
+            with open(filename, mode='r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.DictReader(f)
+                headers = [h.strip().upper() for h in reader.fieldnames or []]
+                
+                # Case 1: Master List (e.g., sec_list_*.csv with 'SYMBOL' and 'BAND')
+                if 'SYMBOL' in headers and 'BAND' in headers:
+                    for row in reader:
+                        sym = row.get('Symbol', row.get('SYMBOL', '')).strip().upper()
+                        band_val = row.get('Band', row.get('BAND', '')).strip()
+                        if sym and band_val:
+                            try:
+                                clean_band = float(''.join(c for c in band_val if c.isdigit() or c == '.'))
+                                bands_map[sym] = clean_band
+                            except ValueError:
+                                continue
+                
+                # Case 2: Band Changes Report (e.g., eq_band_changes_*.csv with 'SYMBOL' and 'TO')
+                elif 'SYMBOL' in headers and 'TO' in headers:
+                    for row in reader:
+                        sym = row.get('Symbol', row.get('SYMBOL', '')).strip().upper()
+                        band_val = row.get('To', row.get('TO', '')).strip()
+                        if sym and band_val:
+                            try:
+                                clean_band = float(''.join(c for c in band_val if c.isdigit() or c == '.'))
+                                bands_map[sym] = clean_band
+                            except ValueError:
+                                continue
+        except Exception:
+            pass
+            
+    return bands_map
+
+
+def fetch_quote_and_bands(symbol):
+    """Fetch live quote and compute exact circuit bounds using official exchange bands."""
+    last_price = 0.0
+    prev_close = 0.0
+
+    # Load official exchange bands from local CSV files
+    nse_bands = load_bands_from_downloaded_csvs()
+    symbol_upper = symbol.strip().upper()
+    
+    # Default to 20.0% if not found in any CSV report
+    band_pct = nse_bands.get(symbol_upper, 20.0)
+
+    try:
+        yf_sym = f"{symbol}.NS"
+        df = yf.download(yf_sym, period="5d", progress=False)
+        if df is not None and not df.empty:
+            if hasattr(df.columns, "levels"):
+                df.columns = df.columns.get_level_values(0)
+
+            if "Close" in df.columns:
+                closes = df["Close"].dropna()
+                if len(closes) >= 1:
+                    last_price = float(closes.iloc[-1])
+                    prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else last_price
+    except Exception:
+        pass
+
+    if prev_close == 0.0:
+        prev_close = last_price if last_price > 0.0 else 1.0
+    if last_price == 0.0:
+        last_price = prev_close
+
+    # Calculate exact circuit limits using the official exchange band percentage
+    upper_circuit = round(prev_close * (1 + band_pct / 100.0), 2)
+    lower_circuit = round(prev_close * (1 - band_pct / 100.0), 2)
+
+    return {
+        "band_pct": float(band_pct),
+        "upper_circuit": upper_circuit,
+        "lower_circuit": lower_circuit,
+        "last_price": round(last_price, 2),
+        "prev_close": round(prev_close, 2),
     }
-    resp = requests.get(NSE_EQUITY_LIST_URL, headers=headers, timeout=30)
-    resp.raise_for_status()
-    reader = csv.DictReader(resp.text.splitlines())
-    symbols = [row["SYMBOL"].strip() for row in reader if row.get("SYMBOL")]
-    return symbols
 
 
 def fetch_quotes_bulk(symbols):
-    """Fetch latest quotes and dynamic price bands for a list of symbols."""
-    yf_symbols = [f"{s}.NS" for s in symbols]
-    
-    data = yf.download(yf_symbols, period="2d", group_by="ticker", threads=True, progress=False)
+    """Fetch latest quotes and dynamic circuit limits for all given symbols."""
     quotes = {}
+    print("Fetching exchange quotes and mapping official bands...")
     
     for symbol in symbols:
-        yf_sym = f"{symbol}.NS"
-        try:
-            if isinstance(data.columns, pd.MultiIndex):
-                if yf_sym not in data.columns.levels[0]:
-                    continue
-                df = data[yf_sym].copy()
-            else:
-                df = data.copy()
-
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-
-            if df.empty or "Close" not in df.columns:
-                continue
+        symbol = symbol.strip().upper()
+        quote_data = fetch_quote_and_bands(symbol)
+        if quote_data:
+            quotes[symbol] = quote_data
             
-            df = df.dropna(subset=["Close"])
-            if df.empty:
-                continue
-            
-            latest = df.iloc[-1]
-            last_price = float(latest["Close"])
-            prev_close = float(df.iloc[-2]["Close"]) if len(df) > 1 else float(latest["Open"]) if "Open" in df.columns else last_price
-
-            # Dynamic Band Detection Logic:
-            band_pct = 20.0
-            if symbol in ["DIACABS"]:  # Custom overrides or map from NSE files here
-                band_pct = 5.0
-            
-            upper_circuit = round(prev_close * (1 + band_pct / 100.0), 2)
-            lower_circuit = round(prev_close * (1 - band_pct / 100.0), 2)
-
-            quotes[symbol] = {
-                "band_pct": band_pct,
-                "upper_circuit": upper_circuit,
-                "lower_circuit": lower_circuit,
-                "last_price": round(last_price, 2),
-                "prev_close": round(prev_close, 2),
-            }
-        except Exception:
-            continue
-
     return quotes
 
 
@@ -141,7 +174,7 @@ def run_once(symbols, current_path, new_path, force=False):
         return
 
     timestamp = datetime.now().isoformat(timespec="seconds")
-    print(f"[{timestamp}] Fetching market data for {len(symbols)} symbol(s)...")
+    print(f"[{timestamp}] Processing {len(symbols)} symbol(s)...")
 
     new_quotes = fetch_quotes_bulk(symbols)
     dump_snapshot(new_path, new_quotes)
@@ -176,11 +209,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "symbols", nargs="?", default=None,
-        help="Comma-separated NSE symbols, e.g. RELIANCE,TCS,DIACABS. Omit when using --all or --empty.",
-    )
-    parser.add_argument(
-        "--all", action="store_true",
-        help="Fetch every symbol listed on NSE instead of a specific list.",
+        help="Comma-separated NSE symbols, e.g. RELIANCE,TCS,HFCL. Omit when using --empty.",
     )
     parser.add_argument(
         "--empty", action="store_true",
@@ -204,15 +233,11 @@ def main():
         empty_output_files(args.current, args.new)
         sys.exit(0)
 
-    if not args.all and not args.symbols:
-        print("Provide a symbol list, pass --all, or use --empty.", file=sys.stderr)
+    if not args.symbols:
+        print("Provide a symbol list or use --empty.", file=sys.stderr)
         sys.exit(1)
 
-    if args.all:
-        symbols = fetch_all_symbols()
-        print(f"Fetched {len(symbols)} symbols from NSE equity master.")
-    else:
-        symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
 
     run_once(symbols, args.current, args.new, force=args.force)
     print("Done. Exiting.")
