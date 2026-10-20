@@ -4,11 +4,12 @@ import gspread
 from google.oauth2.service_account import Credentials
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import subprocess
 import json
 import os
 import sys
+from nselib import capital_market
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -18,15 +19,66 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# --- FETCH MARKET PHASE (CNX SMALLCAP STATUS ONCE) ---
+@st.cache_resource
+def get_market_phase():
+    """Fetches Smallcap 100 MA status once when dashboard initializes/refreshes"""
+    try:
+        end_date = datetime.now().strftime("%d-%m-%Y")
+        start_date = (datetime.now() - timedelta(days=60)).strftime("%d-%m-%Y")
+        data = capital_market.index_data(index='Nifty Smallcap 100', from_date=start_date, to_date=end_date)
+
+        if data is None or data.empty:
+            return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)"
+
+        data.columns = [col.strip().upper() for col in data.columns]
+        date_col = next((col for col in data.columns if 'DATE' in col or 'TIMESTAMP' in col), data.columns[0])
+        close_col = next((col for col in data.columns if 'CLOSE' in col), None)
+
+        if not close_col:
+            return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)"
+
+        data[date_col] = pd.to_datetime(data[date_col], errors='coerce', dayfirst=True)
+        data = data.dropna(subset=[date_col]).sort_values(date_col).reset_index(drop=True)
+
+        if data.empty:
+            return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)"
+
+        data['Close'] = pd.to_numeric(data[close_col].astype(str).str.replace(',', ''), errors='coerce')
+
+        data['MA10'] = data['Close'].rolling(window=10).mean()
+        data['MA20'] = data['Close'].rolling(window=20).mean()
+
+        latest = data.iloc[-1]
+        current_price = latest['Close']
+        ma10 = latest['MA10']
+        ma20 = latest['MA20']
+
+        above_ma10 = current_price > ma10
+        above_ma20 = current_price > ma20
+
+        # Determine phase based on MA status
+        if above_ma10 and above_ma20:
+            return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)"
+        else:
+            return "RED", "#ef4444", "rgba(239, 68, 68, 0.1)", "rgba(239, 68, 68, 0.3)"
+
+    except Exception:
+        # Fallback to default Green if offline or failed
+        return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)"
+
+market_label, market_color, market_bg, market_border = get_market_phase()
+market_icon = "🟢" if market_label == "GREEN" else "🔴"
+
 # --- DASHBOARD DARK THEME CSS ---
-st.html("""
+st.html(f"""
 <style>
-    .stApp {
+    .stApp {{
         background-color: #0b0f17 !important;
         color: #94a3b8 !important;
         font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    }
-    .header-bar {
+    }}
+    .header-bar {{
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -35,21 +87,21 @@ st.html("""
         border-radius: 12px;
         border: 1px solid #1e293b;
         margin-bottom: 20px;
-    }
-    .header-title {
+    }}
+    .header-title {{
         font-size: 20px;
         font-weight: 700;
         color: #f8fafc;
         display: flex;
         align-items: center;
         gap: 8px;
-    }
-    .header-subtitle { font-size: 13px; color: #64748b; }
-    .header-stats { display: flex; align-items: center; gap: 20px; font-size: 14px; }
-    .market-badge {
-        background-color: rgba(16, 185, 129, 0.1);
-        border: 1px solid rgba(16, 185, 129, 0.3);
-        color: #10b981;
+    }}
+    .header-subtitle {{ font-size: 13px; color: #64748b; }}
+    .header-stats {{ display: flex; align-items: center; gap: 20px; font-size: 14px; }}
+    .market-badge {{
+        background-color: {market_bg};
+        border: 1px solid {market_border};
+        color: {market_color};
         padding: 4px 12px;
         border-radius: 20px;
         font-size: 12px;
@@ -57,14 +109,14 @@ st.html("""
         display: flex;
         align-items: center;
         gap: 6px;
-    }
-    .stTabs [data-baseweb="tab-list"] {
+    }}
+    .stTabs [data-baseweb="tab-list"] {{
         gap: 8px;
         border-bottom: 1px solid #1e293b;
         padding-bottom: 8px;
         margin-bottom: 20px;
-    }
-    .stTabs [data-baseweb="tab"] {
+    }}
+    .stTabs [data-baseweb="tab"] {{
         background-color: #0f172a !important;
         border: 1px solid #1e293b !important;
         border-radius: 8px !important;
@@ -72,64 +124,64 @@ st.html("""
         padding: 8px 16px !important;
         font-weight: 500 !important;
         font-size: 14px !important;
-    }
-    .stTabs [aria-selected="true"] {
+    }}
+    .stTabs [aria-selected="true"] {{
         background-color: #064e3b !important;
         border: 1px solid #10b981 !important;
         color: #34d399 !important;
-    }
-    .kpi-card {
+    }}
+    .kpi-card {{
         background-color: #0f172a;
         border: 1px solid #1e293b;
         border-radius: 12px;
         padding: 16px 20px;
         height: 100%;
-    }
-    .kpi-title { font-size: 11px; font-weight: 700; color: #64748b; letter-spacing: 0.05em; margin-bottom: 8px; }
-    .kpi-value { font-size: 28px; font-weight: 800; color: #f8fafc; margin-bottom: 4px; line-height: 1.1; }
-    .kpi-sub { font-size: 12px; color: #64748b; }
-    .section-card {
+    }}
+    .kpi-title {{ font-size: 11px; font-weight: 700; color: #64748b; letter-spacing: 0.05em; margin-bottom: 8px; }}
+    .kpi-value {{ font-size: 28px; font-weight: 800; color: #f8fafc; margin-bottom: 4px; line-height: 1.1; }}
+    .kpi-sub {{ font-size: 12px; color: #64748b; }}
+    .section-card {{
         background-color: #0f172a;
         border: 1px solid #1e293b;
         border-radius: 12px;
         padding: 20px;
         margin-bottom: 20px;
-    }
-    .section-title { font-size: 16px; font-weight: 700; color: #f8fafc; margin-bottom: 2px; }
-    .section-desc { font-size: 12px; color: #64748b; margin-bottom: 16px; }
-    .callout-box { border-radius: 8px; padding: 14px; margin-bottom: 12px; font-size: 13px; line-height: 1.5; }
-    .callout-green { background-color: rgba(6, 78, 59, 0.2); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; }
-    .callout-red { background-color: rgba(127, 29, 29, 0.2); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; }
-    .callout-blue { background-color: rgba(30, 58, 138, 0.2); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; }
-    .rule-section-card {
+    }}
+    .section-title {{ font-size: 16px; font-weight: 700; color: #f8fafc; margin-bottom: 2px; }}
+    .section-desc {{ font-size: 12px; color: #64748b; margin-bottom: 16px; }}
+    .callout-box {{ border-radius: 8px; padding: 14px; margin-bottom: 12px; font-size: 13px; line-height: 1.5; }}
+    .callout-green {{ background-color: rgba(6, 78, 59, 0.2); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; }}
+    .callout-red {{ background-color: rgba(127, 29, 29, 0.2); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; }}
+    .callout-blue {{ background-color: rgba(30, 58, 138, 0.2); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; }}
+    .rule-section-card {{
         background-color: #0f172a;
         border: 1px solid #1e293b;
         border-radius: 10px;
         padding: 16px;
         margin-bottom: 16px;
-    }
-    .rule-title {
+    }}
+    .rule-title {{
         font-size: 15px;
         font-weight: 700;
         color: #34d399;
         margin-bottom: 8px;
         border-bottom: 1px solid #1e293b;
         padding-bottom: 6px;
-    }
-    .rule-item {
+    }}
+    .rule-item {{
         font-size: 13px;
         color: #cbd5e1;
         line-height: 1.6;
         margin-bottom: 6px;
-    }
-    .calc-display-green { background-color: rgba(6, 78, 59, 0.2); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 16px; margin-bottom: 12px; }
-    .calc-display-blue { background-color: rgba(30, 58, 138, 0.2); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; padding: 16px; }
-    .stTextInput input, .stNumberInput input, .stSelectbox > div > div { background-color: #0b0f17 !important; border: 1px solid #334155 !important; color: #f8fafc !important; border-radius: 6px !important; }
-    label { color: #94a3b8 !important; font-size: 12px !important; font-weight: 600 !important; }
-    .streamlit-expanderHeader { background-color: #0b0f17 !important; color: #34d399 !important; border-radius: 8px; border: 1px solid #1e293b; }
-    div[data-testid="stForm"] { border: 1px solid #1e293b !important; background-color: #0f172a !important; border-radius: 12px !important; }
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
+    }}
+    .calc-display-green {{ background-color: rgba(6, 78, 59, 0.2); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 16px; margin-bottom: 12px; }}
+    .calc-display-blue {{ background-color: rgba(30, 58, 138, 0.2); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; padding: 16px; }}
+    .stTextInput input, .stNumberInput input, .stSelectbox > div > div {{ background-color: #0b0f17 !important; border: 1px solid #334155 !important; color: #f8fafc !important; border-radius: 6px !important; }}
+    label {{ color: #94a3b8 !important; font-size: 12px !important; font-weight: 600 !important; }}
+    .streamlit-expanderHeader {{ background-color: #0b0f17 !important; color: #34d399 !important; border-radius: 8px; border: 1px solid #1e293b; }}
+    div[data-testid="stForm"] {{ border: 1px solid #1e293b !important; background-color: #0f172a !important; border-radius: 12px !important; }}
+    #MainMenu {{visibility: hidden;}}
+    footer {{visibility: hidden;}}
 </style>
 """)
 
@@ -242,6 +294,7 @@ else:
 curr_cap = initial_cap + total_pl
 ytd_pct = (total_pl / initial_cap) * 100
 
+# Dynamic Header Bar
 st.html(f"""
 <div class="header-bar">
     <div>
@@ -251,7 +304,7 @@ st.html(f"""
     <div class="header-stats">
         <div>Capital: <b style="color:#f8fafc;">₹{curr_cap:,.0f}</b></div>
         <div>YTD P/L: <b style="color:#10b981;">+₹{total_pl:,.0f} (+{ytd_pct:.2f}%)</b></div>
-        <div class="market-badge">🟢 Market Phase: GREEN</div>
+        <div class="market-badge">{market_icon} Market Phase: {market_label}</div>
     </div>
 </div>
 """)
@@ -609,7 +662,6 @@ with tab_open:
                 "Unrealised P/L": unrealised_pl
             })
 
-    # Action layout for automatic run and Force PB update button (using sys.executable)
     hdr_col1, hdr_col2 = st.columns([3, 1])
     with hdr_col1:
         st.html("""
@@ -622,7 +674,6 @@ with tab_open:
         st.html("<div style='height: 10px;'></div>") # spacer
         force_clicked = st.button("Force PB update", use_container_width=True)
 
-    # Execute Circuit.py script with sys.executable to inherit Streamlit's virtualenv packages
     if open_symbols_list:
         sym_arg = ",".join(open_symbols_list)
         try:
@@ -647,7 +698,6 @@ with tab_open:
         except Exception:
             pass
 
-    # Load current and new circuit snapshots with robust key normalization
     current_bands_data = {}
     new_bands_data = {}
 
@@ -870,6 +920,9 @@ with tab_rr:
             elif r_multiple >= 0:
                 status_label = "🟢 In Profit (Building R)"
                 status_color = "#60a5fa"
+            elif r_multiple <= -1.0 or cmp <= sl:
+                status_label = "🛑 SL Hit! Book small loss (-1R)"
+                status_color = "#ef4444"
             else:
                 status_label = "⚠️ Pullback / Near SL"
                 status_color = "#f87171"
@@ -910,7 +963,7 @@ with tab_rr:
                     </div>
 
                     <div style="display:flex; justify-content:space-between; font-size:10px; color:#475569; font-weight:600;">
-                        <span>0R (SL)</span>
+                        <span>-1R (SL: ₹{sl:.2f})</span>
                         <span>2R</span>
                         <span>4R</span>
                         <span>6R</span>
