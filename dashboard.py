@@ -778,14 +778,30 @@ with tab_open:
         prev_band_val = current_bands_data.get(clean_ticker, {}).get("band_pct")
         latest_band_val = new_bands_data.get(clean_ticker, {}).get("band_pct")
 
+        # Color-code & bold based on exact specifications:
+        # 20% -> Green (#34d399), 10% -> Yellow (#facc15), 5% -> Red (#ef4444)
+        def get_colored_band(val):
+            if val is None:
+                return "N/A", "#94a3b8"
+            v_int = int(round(val))
+            if v_int >= 20:
+                return f"{val:g}%", "#34d399"
+            elif v_int >= 10:
+                return f"{val:g}%", "#facc15"
+            else:
+                return f"{val:g}%", "#ef4444"
+
+        latest_str, latest_col = get_colored_band(latest_band_val)
+        prev_str, prev_col = get_colored_band(prev_band_val)
+
         if prev_band_val is not None and latest_band_val is not None and prev_band_val != latest_band_val:
-            band_display = f'<b style="color:#ef4444;">{prev_band_val:g}% -> {latest_band_val:g}%</b>'
+            band_display = f'<b style="color:{prev_col};">{prev_str}</b> -> <b style="color:{latest_col};">{latest_str}</b>'
         elif latest_band_val is not None:
-            band_display = f'{latest_band_val:g}%'
+            band_display = f'<b style="color:{latest_col};">{latest_str}</b>'
         elif prev_band_val is not None:
-            band_display = f'{prev_band_val:g}%'
+            band_display = f'<b style="color:{prev_col};">{prev_str}</b>'
         else:
-            band_display = 'N/A'
+            band_display = '<b style="color:#94a3b8;">N/A</b>'
 
         p_pl = pos["Unrealised P/L"]
         pl_color = "#34d399" if p_pl >= 0 else "#f87171"
