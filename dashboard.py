@@ -19,30 +19,30 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- FETCH MARKET PHASE (CNX SMALLCAP STATUS ONCE) ---
+# --- FETCH MARKET PHASE & 20 MA DISTANCE CHECK ---
 @st.cache_resource
 def get_market_phase():
-    """Fetches Smallcap 100 MA status once when dashboard initializes/refreshes"""
+    """Fetches Smallcap 100 MA status and checks distance from 20 MA"""
     try:
         end_date = datetime.now().strftime("%d-%m-%Y")
         start_date = (datetime.now() - timedelta(days=60)).strftime("%d-%m-%Y")
         data = capital_market.index_data(index='Nifty Smallcap 100', from_date=start_date, to_date=end_date)
 
         if data is None or data.empty:
-            return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)"
+            return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)", ""
 
         data.columns = [col.strip().upper() for col in data.columns]
         date_col = next((col for col in data.columns if 'DATE' in col or 'TIMESTAMP' in col), data.columns[0])
         close_col = next((col for col in data.columns if 'CLOSE' in col), None)
 
         if not close_col:
-            return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)"
+            return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)", ""
 
         data[date_col] = pd.to_datetime(data[date_col], errors='coerce', dayfirst=True)
         data = data.dropna(subset=[date_col]).sort_values(date_col).reset_index(drop=True)
 
         if data.empty:
-            return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)"
+            return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)", ""
 
         data['Close'] = pd.to_numeric(data[close_col].astype(str).str.replace(',', ''), errors='coerce')
 
@@ -57,15 +57,25 @@ def get_market_phase():
         above_ma10 = current_price > ma10
         above_ma20 = current_price > ma20
 
-        if above_ma10 and above_ma20:
-            return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)"
-        else:
-            return "RED", "#ef4444", "rgba(239, 68, 68, 0.1)", "rgba(239, 68, 68, 0.3)"
+        label = "GREEN" if (above_ma10 and above_ma20) else "RED"
+        color = "#10b981" if label == "GREEN" else "#ef4444"
+        bg = "rgba(16, 185, 129, 0.1)" if label == "GREEN" else "rgba(239, 68, 68, 0.1)"
+        border = "rgba(16, 185, 129, 0.3)" if label == "GREEN" else "rgba(239, 68, 68, 0.3)"
+
+        # Calculate percentage difference from 20 MA
+        ma20_diff_pct = ((current_price - ma20) / ma20) * 100
+        msg_text = ""
+        if ma20_diff_pct > 6.0:
+            msg_text = f" • Caution: Be Careful for Reversal (+{ma20_diff_pct:.2f}% vs 20MA)"
+        elif ma20_diff_pct < -6.0:
+            msg_text = f" • Caution: Run RS Scans ({ma20_diff_pct:.2f}% vs 20MA)"
+
+        return label, color, bg, border, msg_text
 
     except Exception:
-        return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)"
+        return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)", ""
 
-market_label, market_color, market_bg, market_border = get_market_phase()
+market_label, market_color, market_bg, market_border, market_msg_text = get_market_phase()
 market_icon = "🟢" if market_label == "GREEN" else "🔴"
 
 # --- DASHBOARD DARK THEME CSS ---
@@ -95,7 +105,7 @@ st.html(f"""
         gap: 8px;
     }}
     .header-subtitle {{ font-size: 13px; color: #64748b; }}
-    .header-stats {{ display: flex; align-items: center; gap: 20px; font-size: 14px; }}
+    .header-stats {{ display: flex; align-items: center; gap: 16px; font-size: 14px; }}
     .market-badge {{
         background-color: {market_bg};
         border: 1px solid {market_border};
@@ -107,6 +117,7 @@ st.html(f"""
         display: flex;
         align-items: center;
         gap: 6px;
+        white-space: nowrap;
     }}
     .stTabs [data-baseweb="tab-list"] {{
         gap: 8px;
@@ -293,7 +304,7 @@ else:
 curr_cap = initial_cap + total_pl
 ytd_pct = (total_pl / initial_cap) * 100
 
-# Dynamic Header Bar
+# Dynamic Header Bar (Merged Market Phase + Caution Message Badge)
 st.html(f"""
 <div class="header-bar">
     <div>
@@ -303,7 +314,7 @@ st.html(f"""
     <div class="header-stats">
         <div>Capital: <b style="color:#f8fafc;">₹{curr_cap:,.0f}</b></div>
         <div>YTD P/L: <b style="color:#10b981;">+₹{total_pl:,.0f} (+{ytd_pct:.2f}%)</b></div>
-        <div class="market-badge">{market_icon} Market Phase: {market_label}</div>
+        <div class="market-badge">{market_icon} Market Phase: {market_label}{market_msg_text}</div>
     </div>
 </div>
 """)
@@ -379,7 +390,7 @@ with tab_dash:
         peak_pct = 0.0
         current_drawdown_pct = 0.0
 
-    # 1. PORTFOLIO DRAWDOWN & RISK GUARDRAILS BANNER
+    # PORTFOLIO DRAWDOWN & RISK GUARDRAILS BANNER
     if current_drawdown_pct >= 10.0:
         st.html(f"""
         <div class="callout-box callout-red" style="margin-bottom:20px; font-size:14px; padding:16px;">
@@ -624,7 +635,7 @@ with tab_open:
     e2_qty_col = find_col(df, "exit 2 qty") or find_col(df, "exit-2 qty") or find_col(df, "ex2 qty") or find_col(df, "ex2_qty")
     e3_qty_col = find_col(df, "exit 3 qty") or find_col(df, "exit-3 qty") or find_col(df, "ex3 qty") or find_col(df, "ex3_qty")
 
-    # 2. CONSECUTIVE STOP-LOSS ALERT SYSTEM
+    # CONSECUTIVE STOP-LOSS ALERT SYSTEM
     consecutive_sl_count = 0
     if not df.empty and 'PL_Num' in df.columns:
         valid_trades = df[df['PL_Num'] != 0.0]
