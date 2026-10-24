@@ -57,14 +57,12 @@ def get_market_phase():
         above_ma10 = current_price > ma10
         above_ma20 = current_price > ma20
 
-        # Determine phase based on MA status
         if above_ma10 and above_ma20:
             return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)"
         else:
             return "RED", "#ef4444", "rgba(239, 68, 68, 0.1)", "rgba(239, 68, 68, 0.3)"
 
     except Exception:
-        # Fallback to default Green if offline or failed
         return "GREEN", "#10b981", "rgba(16, 185, 129, 0.1)", "rgba(16, 185, 129, 0.3)"
 
 market_label, market_color, market_bg, market_border = get_market_phase()
@@ -153,6 +151,7 @@ st.html(f"""
     .callout-green {{ background-color: rgba(6, 78, 59, 0.2); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; }}
     .callout-red {{ background-color: rgba(127, 29, 29, 0.2); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; }}
     .callout-blue {{ background-color: rgba(30, 58, 138, 0.2); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; }}
+    .callout-yellow {{ background-color: rgba(161, 98, 7, 0.2); border: 1px solid rgba(234, 179, 8, 0.3); color: #facc15; }}
     .rule-section-card {{
         background-color: #0f172a;
         border: 1px solid #1e293b;
@@ -372,10 +371,31 @@ with tab_dash:
         df['Cumulative_Pct'] = (df['Cumulative_PL'] / initial_cap) * 100
         df['Trade_Num'] = range(1, len(df) + 1)
         peak_pct = float(df['Cumulative_Pct'].max())
+        latest_cum_pct = float(df['Cumulative_Pct'].iloc[-1])
+        current_drawdown_pct = max(0.0, peak_pct - latest_cum_pct)
     else:
         df['Trade_Num'] = []
         df['Cumulative_Pct'] = []
         peak_pct = 0.0
+        current_drawdown_pct = 0.0
+
+    # 1. PORTFOLIO DRAWDOWN & RISK GUARDRAILS BANNER
+    if current_drawdown_pct >= 10.0:
+        st.html(f"""
+        <div class="callout-box callout-red" style="margin-bottom:20px; font-size:14px; padding:16px;">
+            <b style="font-size:16px;">🚨 EMERGENCY STOP TRADING ALERT (Drawdown: {current_drawdown_pct:.2f}%)</b><br>
+            Your account equity curve has reached or exceeded the <b>10.0% Maximum Acceptable Drawdown</b> threshold (Peak: +{peak_pct:.2f}%, Current: +{latest_cum_pct:.2f}%).<br>
+            <b>Mandatory Action:</b> Stop taking all new trading entries immediately. Reduce active risk, step back from market noise, and execute a comprehensive post-mortem trade audit before resuming.
+        </div>
+        """)
+    elif current_drawdown_pct >= 5.0:
+        st.html(f"""
+        <div class="callout-box callout-yellow" style="margin-bottom:20px; font-size:14px; padding:16px;">
+            <b style="font-size:16px;">⚠️ DRAWDOWN CAUTION WARNING (Drawdown: {current_drawdown_pct:.2f}%)</b><br>
+            Your portfolio has experienced a drawdown exceeding <b>5.0%</b> from its peak equity high (Peak: +{peak_pct:.2f}%, Current: +{latest_cum_pct:.2f}%).<br>
+            <b>Recommended Action:</b> Tighten risk parameters immediately. Reduce position sizes to half-risk (0.25% per trade), cut extended setups, and focus strictly on high-conviction A+ setups.
+        </div>
+        """)
 
     k1, k2, k3, k4, k5, k6 = st.columns(6)
 
@@ -419,11 +439,12 @@ with tab_dash:
     </div>
     """)
 
-    k6.html("""
+    dd_color = "#34d399" if current_drawdown_pct < 5.0 else ("#facc15" if current_drawdown_pct < 10.0 else "#f87171")
+    k6.html(f"""
     <div class="kpi-card">
-        <div class="kpi-title">PLAN FOLLOWED</div>
-        <div class="kpi-value" style="color:#a855f7;">42.31%</div>
-        <div class="kpi-sub" style="color:#f87171;">Needs Improvement</div>
+        <div class="kpi-title">CURRENT DRAWDOWN</div>
+        <div class="kpi-value" style="color:{dd_color};">-{current_drawdown_pct:.2f}%</div>
+        <div class="kpi-sub">Peak: +{peak_pct:.2f}%</div>
     </div>
     """)
 
@@ -603,6 +624,34 @@ with tab_open:
     e2_qty_col = find_col(df, "exit 2 qty") or find_col(df, "exit-2 qty") or find_col(df, "ex2 qty") or find_col(df, "ex2_qty")
     e3_qty_col = find_col(df, "exit 3 qty") or find_col(df, "exit-3 qty") or find_col(df, "ex3 qty") or find_col(df, "ex3_qty")
 
+    # 2. CONSECUTIVE STOP-LOSS ALERT SYSTEM
+    consecutive_sl_count = 0
+    if not df.empty and 'PL_Num' in df.columns:
+        valid_trades = df[df['PL_Num'] != 0.0]
+        if not valid_trades.empty:
+            for pl in reversed(valid_trades['PL_Num'].tolist()):
+                if pl < 0:
+                    consecutive_sl_count += 1
+                else:
+                    break
+
+    if consecutive_sl_count >= 5:
+        st.html(f"""
+        <div class="callout-box callout-red" style="margin-bottom:16px; font-size:14px; padding:16px;">
+            <b style="font-size:16px;">🛑 CRITICAL LOSS STREAK ALERT ({consecutive_sl_count} Consecutive Stop Losses)</b><br>
+            Your trade log shows <b>{consecutive_sl_count} consecutive trades hitting Stop Loss</b> in a row.<br>
+            <b>Mandatory Rule:</b> Take a mandatory break from opening new trades for at least 2 trading days. Review market environment alignment and recalibrate before executing next entries.
+        </div>
+        """)
+    elif consecutive_sl_count >= 3:
+        st.html(f"""
+        <div class="callout-box callout-yellow" style="margin-bottom:16px; font-size:14px; padding:16px;">
+            <b style="font-size:16px;">⚠️ CONSECUTIVE STOP-LOSS WARNING ({consecutive_sl_count} Consecutive Stop Losses)</b><br>
+            You have experienced <b>{consecutive_sl_count} consecutive trades hitting Stop Loss</b>.<br>
+            <b>Action Required:</b> Reduce your position sizing by 50% on all upcoming new entries until a winning setup is established.
+        </div>
+        """)
+
     open_positions_raw = []
     open_symbols_list = []
 
@@ -778,8 +827,6 @@ with tab_open:
         prev_band_val = current_bands_data.get(clean_ticker, {}).get("band_pct")
         latest_band_val = new_bands_data.get(clean_ticker, {}).get("band_pct")
 
-        # Color-code & bold based on exact specifications:
-        # 20% -> Green (#34d399), 10% -> Yellow (#facc15), 5% -> Red (#ef4444)
         def get_colored_band(val):
             if val is None:
                 return "N/A", "#94a3b8"
